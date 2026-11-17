@@ -11,5 +11,11 @@ public class MovementBenchmarkTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.V6;
 
 		ExtraModuleNames.AddRange( new string[] { "MovementBenchmark" } );
+		RegisterModulesCreatedByRider();
+	}
+
+	private void RegisterModulesCreatedByRider()
+	{
+		ExtraModuleNames.AddRange(new string[] { "MovementBenchmarkUncooked" });
 	}
 }

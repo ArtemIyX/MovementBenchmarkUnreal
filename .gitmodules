@@ -1,0 +1,3 @@
+[submodule "Plugins/flECSUnreal"]
+	path = Plugins/flECSUnreal
+	url = https://github.com/ArtemIyX/flECSUnreal.git
