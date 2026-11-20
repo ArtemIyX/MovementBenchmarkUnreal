@@ -22,6 +22,7 @@ private:
 
 	enum class ETestPhase : uint8
 	{
+		WaitingForEntities,
 		WaitingForWarmup,
 		WaitingForCaptureStart,
 		Capturing,
@@ -35,4 +36,6 @@ private:
 	float CaptureStartTimeoutSeconds = 10.0f;
 	float PhaseElapsedSeconds = 0.0f;
 	int32 TotalEntityCount = 0;
+	int32 ExpectedEntityCount = 0;
+	float StartupTimeoutSeconds = 10.0f;
 };

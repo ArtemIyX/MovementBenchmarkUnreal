@@ -16,9 +16,11 @@ void UEntityDirectorPerfTestController::OnInit()
 
 	FParse::Value(FCommandLine::Get(), TEXT("EntityDirectorPerfTest.WarmupSeconds="), WarmupSeconds);
 	FParse::Value(FCommandLine::Get(), TEXT("EntityDirectorPerfTest.CaptureSeconds="), CaptureSeconds);
+	FParse::Value(FCommandLine::Get(), TEXT("EntityDirectorPerfTest.StartupTimeoutSeconds="), StartupTimeoutSeconds);
 
 	WarmupSeconds = FMath::Max(WarmupSeconds, 0.0f);
 	CaptureSeconds = FMath::Max(CaptureSeconds, 0.1f);
+	StartupTimeoutSeconds = FMath::Max(StartupTimeoutSeconds, 0.1f);
 }
 
 void UEntityDirectorPerfTestController::SetupTest()
@@ -59,26 +61,22 @@ void UEntityDirectorPerfTestController::SetupTest()
 	}
 
 	EntityDirector = FoundDirector;
-	FoundDirector->Start();
-	const int32 ExpectedEntityCount = FMath::Max(FoundDirector->EntitiesToCreate, 0);
-	if (ExpectedEntityCount == 0 || FoundDirector->GetCreatedEntityCount() != ExpectedEntityCount)
+	ExpectedEntityCount = FoundDirector->EntitiesToCreate;
+	if (ExpectedEntityCount <= 0)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Entity director created %d of %d requested entities; cannot run the performance capture."),
-		       FoundDirector->GetCreatedEntityCount(), ExpectedEntityCount);
+		UE_LOG(LogTemp, Error, TEXT("The entity director benchmark requires a positive entity count."));
 		EndTestFailure();
 		return;
 	}
-	TotalEntityCount = FoundDirector->GetCreatedEntityCount();
-
-	UE_LOG(LogTemp, Display, TEXT("Entity director performance test started with %d entities. Warming up for %.1f seconds."),
-	       TotalEntityCount, WarmupSeconds);
-	Phase = ETestPhase::WaitingForWarmup;
+	FoundDirector->Start();
+	Phase = ETestPhase::WaitingForEntities;
 	PhaseElapsedSeconds = 0.0f;
 }
 
 void UEntityDirectorPerfTestController::RunTest()
 {
-	if (!EntityDirector.IsValid())
+	AEntityDirector* Director = EntityDirector.Get();
+	if (!Director || !Director->IsRunActive() || Director->HasStartFailed())
 	{
 		UE_LOG(LogTemp, Error, TEXT("Entity director was destroyed before the performance capture started."));
 		Phase = ETestPhase::Finished;
@@ -102,16 +100,35 @@ void UEntityDirectorPerfTestController::OnTick(const float TimeDelta)
 		return;
 	}
 
-	if (!EntityDirector.IsValid())
+	AEntityDirector* Director = EntityDirector.Get();
+	if (!Director || !Director->IsRunActive() || Director->HasStartFailed())
 	{
-		UE_LOG(LogTemp, Error, TEXT("Entity director was destroyed while the performance test was running."));
+		UE_LOG(LogTemp, Error, TEXT("The entity director's FLECS run failed to start or is no longer active."));
 		Phase = ETestPhase::Finished;
 		EndTestFailure();
 		return;
 	}
 
 	PhaseElapsedSeconds += TimeDelta;
-	if (Phase == ETestPhase::WaitingForWarmup && PhaseElapsedSeconds >= WarmupSeconds)
+	if (Phase == ETestPhase::WaitingForEntities)
+	{
+		if (Director->GetCreatedEntityCount() == ExpectedEntityCount)
+		{
+			TotalEntityCount = ExpectedEntityCount;
+			Phase = ETestPhase::WaitingForWarmup;
+			PhaseElapsedSeconds = 0.0f;
+			UE_LOG(LogTemp, Display, TEXT("FLECS worker published %d entities. Warming up for %.1f seconds."),
+				TotalEntityCount, WarmupSeconds);
+		}
+		else if (PhaseElapsedSeconds >= StartupTimeoutSeconds)
+		{
+			UE_LOG(LogTemp, Error, TEXT("No complete FLECS publication for %d entities within %.1f seconds."),
+				ExpectedEntityCount, StartupTimeoutSeconds);
+			Phase = ETestPhase::Finished;
+			EndTestFailure();
+		}
+	}
+	else if (Phase == ETestPhase::WaitingForWarmup && PhaseElapsedSeconds >= WarmupSeconds)
 	{
 		RunTest();
 	}
@@ -211,7 +228,7 @@ void UEntityDirectorPerfTestController::WriteSummaryCsv(
 		for (int32 ColumnIndex = 1; ColumnIndex < Header.Num(); ++ColumnIndex)
 		{
 			const FString ColumnName(Header[ColumnIndex]);
-			if (ColumnName.Contains(TEXT("/GameThread/")) &&
+			if (ColumnName.Contains(TEXT("/FlecsSimulation/")) &&
 				ColumnName.EndsWith(TEXT("/STAT_EntityDirectorMovementSystem")))
 			{
 				SystemTimingColumn = ColumnIndex;
@@ -251,7 +268,7 @@ void UEntityDirectorPerfTestController::WriteSummaryCsv(
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Profiler CSV has no STAT_EntityDirectorMovementSystem Game Thread samples."));
+			UE_LOG(LogTemp, Warning, TEXT("Profiler CSV has no STAT_EntityDirectorMovementSystem FlecsSimulation samples."));
 		}
 
 		if (MovingEntitySamples > 0)
@@ -261,7 +278,7 @@ void UEntityDirectorPerfTestController::WriteSummaryCsv(
 			if (TimingSamples > 0 && AverageMovingCount > 0.0)
 			{
 				const double AverageMicrosecondsPerMovingEntity =
-					(TotalSystemTimeMs / TimingSamples) / AverageMovingCount * 1000.0;
+					TotalSystemTimeMs / TotalMovingEntities * 1000.0;
 				AverageUsPerMovingEntity = FString::SanitizeFloat(AverageMicrosecondsPerMovingEntity);
 			}
 			else if (AverageMovingCount <= 0.0)
@@ -280,7 +297,7 @@ void UEntityDirectorPerfTestController::WriteSummaryCsv(
 	}
 
 	const FString SummaryCsv = FString::Printf(
-		TEXT("AverageSystemTimeMs,MaxSystemTimeMs,AverageMovingEntities,TotalEntities,AverageUsPerMovingEntity\r\n%s,%s,%s,%d,%s\r\n"),
+		TEXT("SimulationThread,AverageSystemTimeMsPerGameFrame,MaxSystemTimeMsPerGameFrame,AverageMovingEntitySamplesPerGameFrame,TotalEntities,AverageUsPerMovingEntitySample\r\nFlecsSimulation,%s,%s,%s,%d,%s\r\n"),
 		*AverageSystemTimeMs,
 		*MaxSystemTimeMs,
 		*AverageMovingEntities,

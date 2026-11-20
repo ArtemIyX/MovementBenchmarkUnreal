@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Subsystems/MovementBenchmarkSimulation.h"
 #include "EntityDirector.generated.h"
 
 struct FECSTransformComponent
@@ -57,15 +58,21 @@ public:
 	int32 GetCreatedEntityCount() const { return CreatedEntityIds.Num(); }
 
 	const TArray<uint64>& GetCreatedEntityIds() const { return CreatedEntityIds; }
+	const FMovementBenchmarkRun& GetRun() const { return Run; }
+	bool HasStartFailed() const { return bStartFailed; }
+	bool IsRunActive() const;
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	void CreateEntities();
-	void RegisterMovementSystem();
-	void DestroyCreatedEntities();
+	void OnWorldAboutToDetach(UWorld& World);
+	void ResetRun();
 
+	FMovementBenchmarkRun Run;
 	TArray<uint64> CreatedEntityIds;
+	uint64 LastStartupTick = 0;
+	bool bStartFailed = false;
 };

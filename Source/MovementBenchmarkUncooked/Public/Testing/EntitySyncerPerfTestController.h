@@ -31,6 +31,8 @@ private:
 	enum class ETestPhase : uint8
 	{
 		WaitingForSpawn,
+		WaitingForEntities,
+		WaitingForFirstSync,
 		WaitingForWarmup,
 		WaitingForCaptureStart,
 		Capturing,
@@ -44,6 +46,7 @@ private:
 	float WarmupSeconds = 5.0f;
 	float CaptureSeconds = 30.0f;
 	float SpawnTimeoutSeconds = 60.0f;
+	float StartupTimeoutSeconds = 10.0f;
 	float CaptureStartTimeoutSeconds = 10.0f;
 	float PhaseElapsedSeconds = 0.0f;
 	int32 SpawnedActorCount = 0;
