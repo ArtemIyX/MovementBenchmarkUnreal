@@ -45,10 +45,12 @@ void UEntitySyncerPerfTestController::OnInit()
 	FParse::Value(FCommandLine::Get(), TEXT("EntitySyncerPerfTest.WarmupSeconds="), WarmupSeconds);
 	FParse::Value(FCommandLine::Get(), TEXT("EntitySyncerPerfTest.CaptureSeconds="), CaptureSeconds);
 	FParse::Value(FCommandLine::Get(), TEXT("EntitySyncerPerfTest.SpawnTimeoutSeconds="), SpawnTimeoutSeconds);
+	FParse::Value(FCommandLine::Get(), TEXT("EntitySyncerPerfTest.StartupTimeoutSeconds="), StartupTimeoutSeconds);
 
 	WarmupSeconds = FMath::Max(WarmupSeconds, 0.0f);
 	CaptureSeconds = FMath::Max(CaptureSeconds, 0.1f);
 	SpawnTimeoutSeconds = FMath::Max(SpawnTimeoutSeconds, 0.1f);
+	StartupTimeoutSeconds = FMath::Max(StartupTimeoutSeconds, 0.1f);
 }
 
 void UEntitySyncerPerfTestController::SetupTest()
@@ -155,33 +157,11 @@ void UEntitySyncerPerfTestController::HandleAllActorsSpawned()
 		ActorsToSync.Add(Actor);
 	}
 
-	Director->Start();
-	if (Director->GetCreatedEntityCount() != ExpectedActorCount)
-	{
-		FailTest(FString::Printf(
-			TEXT("Entity director created %d of %d expected entities."),
-			Director->GetCreatedEntityCount(),
-			ExpectedActorCount));
-		return;
-	}
-
-	Syncer->SetEntityIds(Director->GetCreatedEntityIds());
 	Syncer->SetFreeActors(ActorsToSync);
-	if (!Syncer->Start())
-	{
-		FailTest(TEXT("Entity syncer failed to register its FLECS sync system."));
-		return;
-	}
-
 	SpawnedActorCount = ActorsToSync.Num();
-	Phase = ETestPhase::WaitingForWarmup;
+	Director->Start();
+	Phase = ETestPhase::WaitingForEntities;
 	PhaseElapsedSeconds = 0.0f;
-	UE_LOG(
-		LogTemp,
-		Display,
-		TEXT("Spawned %d actors, started the entity director and syncer, and will warm up for %.1f seconds."),
-		SpawnedActorCount,
-		WarmupSeconds);
 }
 
 void UEntitySyncerPerfTestController::RunTest()
@@ -206,10 +186,17 @@ void UEntitySyncerPerfTestController::OnTick(const float TimeDelta)
 		return;
 	}
 
-	if (!EntityDirector.IsValid() || !EntitySyncer.IsValid() ||
+	AEntityDirector* Director = EntityDirector.Get();
+	AEntitySyncer* Syncer = EntitySyncer.Get();
+	if (!Director || !Syncer ||
 		(Phase == ETestPhase::WaitingForSpawn && !SimpleSpawner.IsValid()))
 	{
 		FailTest(TEXT("A required actor was destroyed while the entity sync performance test was running."));
+		return;
+	}
+	if (Phase != ETestPhase::WaitingForSpawn && (!Director->IsRunActive() || Director->HasStartFailed()))
+	{
+		FailTest(TEXT("The FLECS run failed to start or is no longer active."));
 		return;
 	}
 
@@ -217,6 +204,39 @@ void UEntitySyncerPerfTestController::OnTick(const float TimeDelta)
 	if (Phase == ETestPhase::WaitingForSpawn && PhaseElapsedSeconds >= SpawnTimeoutSeconds)
 	{
 		FailTest(FString::Printf(TEXT("Spawner did not finish within %.1f seconds."), SpawnTimeoutSeconds));
+	}
+	else if (Phase == ETestPhase::WaitingForEntities)
+	{
+		if (Director->GetCreatedEntityCount() == SpawnedActorCount)
+		{
+			Syncer->SetRun(Director->GetRun(), Director->GetCreatedEntityIds());
+			if (!Syncer->Start())
+			{
+				FailTest(TEXT("Could not start applying FLECS snapshots to spawned actors."));
+				return;
+			}
+			Phase = ETestPhase::WaitingForFirstSync;
+			PhaseElapsedSeconds = 0.0f;
+		}
+		else if (PhaseElapsedSeconds >= StartupTimeoutSeconds)
+		{
+			FailTest(FString::Printf(TEXT("No complete FLECS publication for %d entities within %.1f seconds."),
+				SpawnedActorCount, StartupTimeoutSeconds));
+		}
+	}
+	else if (Phase == ETestPhase::WaitingForFirstSync)
+	{
+		if (Syncer->HasAppliedSnapshot())
+		{
+			Phase = ETestPhase::WaitingForWarmup;
+			PhaseElapsedSeconds = 0.0f;
+			UE_LOG(LogTemp, Display, TEXT("Applied the first worker snapshot to %d actors. Warming up for %.1f seconds."),
+				SpawnedActorCount, WarmupSeconds);
+		}
+		else if (PhaseElapsedSeconds >= StartupTimeoutSeconds)
+		{
+			FailTest(FString::Printf(TEXT("The syncer did not apply a FLECS snapshot within %.1f seconds."), StartupTimeoutSeconds));
+		}
 	}
 	else if (Phase == ETestPhase::WaitingForWarmup && PhaseElapsedSeconds >= WarmupSeconds)
 	{
